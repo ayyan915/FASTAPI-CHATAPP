@@ -84,14 +84,14 @@ def register(
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    return RedirectResponse(url="/auth/login", status_code=303)
+    return RedirectResponse(url="/", status_code=303)
 
-@router.get("/login")
+@router.get("/")
 def login_form(request: Request):
     return templates.TemplateResponse(request=request, name="login.html", context={"request": request})
 
 
-@router.post("/login")
+@router.post("/")
 def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
     if not user or not pwd_hash.verify(password, user.password):
@@ -104,6 +104,6 @@ def login(username: str = Form(...), password: str = Form(...), db: Session = De
 
 @router.get("/logout")
 def logout():
-    response = RedirectResponse(url="/auth/login", status_code=303)
+    response = RedirectResponse(url="/", status_code=303)
     response.delete_cookie(key="access_token")
     return response

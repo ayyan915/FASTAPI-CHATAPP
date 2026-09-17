@@ -123,7 +123,7 @@
     <div class="error-box">{{ error }}</div>
     {% endif %}
 
-    <form action="/auth/register" method="post">
+    <form action="/register" method="post">
       <div class="field">
         <label for="username">Username</label>
         <input type="text" id="username" name="username" minlength="3" maxlength="50" required placeholder="e.g. ayyan123" autocomplete="username">
@@ -148,7 +148,7 @@
     </form>
 
     <div class="footer-link">
-      Already have an account? <a href="/auth/login">Login</a>
+      Already have an account? <a href="/">Login</a>
     </div>
   </div>
 </body>

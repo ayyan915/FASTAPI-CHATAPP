@@ -64,18 +64,7 @@ async def websocket_endpoint(websocket: WebSocket, db=Depends(get_db)):
     if name_tag:
         online_users[name_tag] = websocket
         socket_to_user[id(websocket)] = name_tag
-        friends_list = db.query(Friends).filter(Friends.user_id == current_user.id).all()
-        print(friends_list)
-        for friend in friends_list:
-            print(friend)
-            friend_obj = db.query(User).filter(User.id == friend.friend_id).first()
-            if friend_obj:
-                print(friend_obj)
-                friend_socket = online_users[friend_obj.name_tag]
-                if friend_socket:
-                    print(friend_socket)
-                    await friend_socket.send_json({"type": "status", "status": "online", "friend_name": current_user.name_tag})
-
+        
             
         
 

@@ -14,7 +14,7 @@ import os
 load_dotenv()
 SECRET_KEY = str(os.getenv("SECRET_KEY"))
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(tags=["auth"])
 templates = Jinja2Templates(directory="templates")
 pwd_hash = PasswordHash.recommended()
 
@@ -107,5 +107,3 @@ def logout():
     response = RedirectResponse(url="/auth/login", status_code=303)
     response.delete_cookie(key="access_token")
     return response
-
-

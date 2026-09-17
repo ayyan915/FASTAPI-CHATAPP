@@ -154,6 +154,7 @@
       <div class="left">
         <a class="back" href="/home/friends" title="Back">&larr;</a>
         <strong>{{ friend.name_tag }}</strong>
+        <span id="user_status"></span>
       </div>
       <div class="me-tag">You: {{ current_user.name_tag }}</div>
     </div>
@@ -170,6 +171,7 @@
     const friendTag = "{{ friend.name_tag }}";
     const meTag = "{{ current_user.name_tag }}";
     const messagesEl = document.getElementById('messages');
+    const user_status = document.getElementById('user_status')
 
     function appendMessage(sender, text){
       const div = document.createElement('div');
@@ -184,6 +186,7 @@
 
     ws.addEventListener('open', () => {
       ws.send(JSON.stringify({ type: 'chat_history', with: friendTag }));
+      ws.send(JSON.stringify({type: "user_status", username: friendTag}));
     });
 
     ws.addEventListener('message', (ev) => {
@@ -193,6 +196,14 @@
           data.messages.forEach(m => appendMessage(m.sender, m.content));
         } else if(data.type === 'message'){
           appendMessage(data.sender, data.content);
+        }
+        else if(data.type === 'status', data.status === 'online', data.friend_name === friendTag){
+          user_status.innerText = data.status;
+        }
+        else if(data.type === 'status', data.status === 'offline'){
+          if (friendTag === data.friend_name){
+            user_status.innerText = "";
+          }
         }
       }catch(e){ console.error(e) }
     });

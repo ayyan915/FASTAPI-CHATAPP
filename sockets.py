@@ -12,6 +12,25 @@ online_users = {}  # name_tag -> WebSocket
 socket_to_user = {}  # websocket id -> name_tag
 
 
+async def notify_friends_user_offline(db, disconnected_name_tag: str):
+    user = db.query(User).filter(User.name_tag == disconnected_name_tag).first()
+    if not user:
+        return
+
+    friend_links = db.query(Friends).filter(Friends.user_id == user.id).all()
+    for link in friend_links:
+        friend = db.query(User).filter(User.id == link.friend_id).first()
+        if not friend:
+            continue
+
+        peer_ws = online_users.get(friend.name_tag)
+        if peer_ws:
+            try:
+                await peer_ws.send_json({"type": "status", "status": "offline", "friend_name": disconnected_name_tag})
+            except Exception:
+                pass
+
+
 @router.websocket("/wss")
 async def websocket_endpoint(websocket: WebSocket, db=Depends(get_db)):
     # Read access token from cookies (browser will send cookies on same-origin ws/wss)
@@ -45,6 +64,17 @@ async def websocket_endpoint(websocket: WebSocket, db=Depends(get_db)):
     if name_tag:
         online_users[name_tag] = websocket
         socket_to_user[id(websocket)] = name_tag
+        friends_list = db.query(Friends).filter(Friends.user_id == current_user.id).all()
+        for friend in friends_list:
+            friend_obj = db.query(User).filter(User.id == friend.friend_id).first()
+            if friend_obj:
+                friend_socket = online_users.get(friend_obj.name_tag)
+                if friend_socket:
+                    await friend_socket.send_json({"type": "status", "status": "online", "friend_name": current_user.name_tag})
+
+            
+        
+
 
     try:
         while True:
@@ -103,10 +133,23 @@ async def websocket_endpoint(websocket: WebSocket, db=Depends(get_db)):
 
                 await websocket.send_json({"type": "chat_history", "messages": chat_history})
 
+            elif typ == "user_status":
+                friend_user = db.query(User).filter(User.name_tag == data.get("username")).first()
+                if friend_user:
+                    is_friend = db.query(Friends).filter(
+                        Friends.user_id == current_user.id,
+                        Friends.friend_id == friend_user.id
+                    ).first()
+                    if is_friend and friend_user.name_tag in online_users:
+                        await websocket.send_json({"type": "status", "status": "online", "friend_name": friend_user.name_tag})
+
     except WebSocketDisconnect:
         pass
     finally:
+        
         tag = socket_to_user.pop(id(websocket), None)
-        if tag and online_users.get(tag) is websocket:
-            online_users.pop(tag, None)
-
+        if tag:
+            if online_users.get(tag) is websocket:
+                online_users.pop(tag, None)
+            await notify_friends_user_offline(db, tag)
+        

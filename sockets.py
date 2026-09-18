@@ -136,6 +136,49 @@ async def websocket_endpoint(websocket: WebSocket, db=Depends(get_db)):
                     if is_friend and friend_user.name_tag in online_users:
                         await websocket.send_json({"type": "status", "status": "online", "friend_name": friend_user.name_tag})
 
+
+            #apply for call to any one
+            elif typ == "call-offer":
+                target_tag = data.get("target")
+                offer = data.get("offer")
+                if target_tag and offer:
+                    target_ws = online_users.get(target_tag)
+                    if target_ws:
+                        await target_ws.send_json({"type": "call-offer", "from": name_tag, "offer": offer})
+                    else:
+                        await websocket.send_json({"type": "call-status", "status": "offline", "target": target_tag})
+
+
+            #call uthana 
+            elif typ == "call-answer":
+                target_tag = data.get("target")
+                answer = data.get("answer")
+                if target_tag and answer:
+                    target_ws = online_users.get(target_tag)
+                    if target_ws:
+                        await target_ws.send_json({"type": "call-answer", "from": name_tag, "answer": answer})
+
+
+            elif typ == "call-ice-candidate":
+                target_tag = data.get("target")
+                candidate = data.get("candidate")
+                if target_tag and candidate:
+                    target_ws = online_users.get(target_tag)
+                    if target_ws:
+                        await target_ws.send_json({"type": "call-ice-candidate", "from": name_tag, "candidate": candidate})
+
+
+             # CALL END: kisi bhi taraf se call katne par doosri taraf ko batana
+            elif typ == "call-end":
+                target_tag = data.get("target")
+                if target_tag:
+                    target_ws = online_users.get(target_tag)
+                    if target_ws:
+                        await target_ws.send_json({"type": "call-end", "from": name_tag})
+
+
+
+
     except WebSocketDisconnect:
         pass
     finally:

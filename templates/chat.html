@@ -146,6 +146,108 @@
     .composer { padding: 10px 14px; }
     .composer button { padding: 0 16px; }
   }
+
+  .header-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    background: #f2f2f3;
+    color: var(--ink);
+    font-size: 15px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.12s;
+  }
+  .icon-btn:hover { background: var(--border); }
+
+  /* Full-screen call overlay: shows once a call starts (outgoing or accepted) */
+  .call-overlay {
+    position: fixed;
+    inset: 0;
+    background: #101113;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .call-overlay.active { display: flex; }
+  .call-avatar {
+    width: 110px;
+    height: 110px;
+    border-radius: 50%;
+    background: #2a2a2d;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 40px;
+    font-weight: 700;
+    margin-bottom: 20px;
+  }
+  .call-name {
+    color: #fff;
+    font-size: 19px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .call-status {
+    color: rgba(255,255,255,0.65);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .call-controls {
+    position: absolute;
+    bottom: 40px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 18px;
+  }
+  .call-controls button {
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    font-size: 20px;
+  }
+  #muteBtn { background: rgba(255,255,255,0.15); color: #fff; }
+  #muteBtn.muted { background: #fff; color: var(--ink); }
+  #endCallBtn { background: #e6413f; color: #fff; }
+
+  /* Incoming call popup */
+  .incoming-call {
+    position: fixed;
+    inset: 0;
+    background: rgba(16,17,19,0.55);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+  }
+  .incoming-call.active { display: flex; }
+  .incoming-call-card {
+    background: #fff;
+    border-radius: 20px;
+    padding: 28px 30px;
+    text-align: center;
+    min-width: 240px;
+    box-shadow: 0 20px 45px rgba(16,17,19,0.2);
+  }
+  .incoming-call-card p { margin: 0 0 20px; font-size: 16px; font-weight: 700; }
+  .incoming-call-actions { display: flex; gap: 16px; justify-content: center; }
+  .incoming-call-actions button {
+    width: 52px; height: 52px; border-radius: 50%; border: none; cursor: pointer; font-size: 19px;
+  }
+  #acceptBtn { background: #2fae5c; color: #fff; }
+  #declineBtn { background: #e6413f; color: #fff; }
 </style>
 </head>
 <body>
@@ -156,7 +258,10 @@
         <strong>{{ friend.name_tag }}</strong>
         <span id="user_status"></span>
       </div>
-      <div class="me-tag">You: {{ current_user.name_tag }}</div>
+      <div class="header-actions">
+        <button class="icon-btn" id="callBtn" title="Voice call">&#128222;</button>
+        <div class="me-tag">You: {{ current_user.name_tag }}</div>
+      </div>
     </div>
 
     <div class="messages" id="messages"></div>
@@ -164,6 +269,27 @@
     <div class="composer">
       <input id="messageInput" placeholder="Write a message...">
       <button id="sendBtn">Send</button>
+    </div>
+  </div>
+
+  <div class="call-overlay" id="callOverlay">
+    <div class="call-avatar" id="callAvatar">?</div>
+    <div class="call-name" id="callName"></div>
+    <div class="call-status" id="callStatus">Calling...</div>
+    <audio id="remoteAudio" autoplay></audio>
+    <div class="call-controls">
+      <button id="muteBtn" title="Mute">&#127908;</button>
+      <button id="endCallBtn" title="End call">&#10006;</button>
+    </div>
+  </div>
+
+  <div class="incoming-call" id="incomingCall">
+    <div class="incoming-call-card">
+      <p id="incomingCallText">Incoming call</p>
+      <div class="incoming-call-actions">
+        <button id="declineBtn" title="Decline">&#10006;</button>
+        <button id="acceptBtn" title="Accept">&#128222;</button>
+      </div>
     </div>
   </div>
 
@@ -180,6 +306,138 @@
       messagesEl.appendChild(div);
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
+
+    // ---- Call feature (WebRTC) ----
+    const ICE_SERVERS = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ]
+    };
+    let pc = null;              // RTCPeerConnection for the current call
+    let localStream = null;     // our own mic/camera stream
+    let callPartner = null;     // name_tag of whoever we are calling / in a call with
+    let pendingIncomingOffer = null; // { from, offer } while an incoming call is ringing
+
+    const callOverlay = document.getElementById('callOverlay');
+    const callAvatar = document.getElementById('callAvatar');
+    const callName = document.getElementById('callName');
+    const callStatus = document.getElementById('callStatus');
+    const remoteAudio = document.getElementById('remoteAudio');
+    const incomingCall = document.getElementById('incomingCall');
+    const incomingCallText = document.getElementById('incomingCallText');
+    const muteBtn = document.getElementById('muteBtn');
+
+    function setupPeerConnectionEvents(){
+      // Whenever WebRTC finds a possible network path, it must be sent to the other side
+      pc.onicecandidate = (e) => {
+        if (e.candidate && callPartner){
+          ws.send(JSON.stringify({ type: 'call-ice-candidate', target: callPartner, candidate: e.candidate }));
+        }
+      };
+      // Fires when the other person's audio actually arrives
+      pc.ontrack = (e) => {
+        remoteAudio.srcObject = e.streams[0];
+        callStatus.textContent = 'Connected';
+      };
+      // If the connection drops (network issue, other side closed tab, etc.)
+      pc.onconnectionstatechange = () => {
+        if (pc && (pc.connectionState === 'disconnected' || pc.connectionState === 'failed')){
+          endCall(false);
+        }
+      };
+    }
+
+    async function startCall(){
+      if (pc) return; // already in a call, ignore double-click
+      callPartner = friendTag;
+      callAvatar.textContent = friendTag.slice(0,1).toUpperCase();
+      callName.textContent = friendTag;
+      callStatus.textContent = 'Calling...';
+      callOverlay.classList.add('active');
+
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      pc = new RTCPeerConnection(ICE_SERVERS);
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      setupPeerConnectionEvents();
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'call-offer', target: callPartner, offer: offer }));
+    }
+
+    async function acceptCall(){
+      if (!pendingIncomingOffer) return;
+      callPartner = pendingIncomingOffer.from;
+      incomingCall.classList.remove('active');
+      callAvatar.textContent = callPartner.slice(0,1).toUpperCase();
+      callName.textContent = callPartner;
+      callStatus.textContent = 'Connected';
+      callOverlay.classList.add('active');
+
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      pc = new RTCPeerConnection(ICE_SERVERS);
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      setupPeerConnectionEvents();
+
+      await pc.setRemoteDescription(new RTCSessionDescription(pendingIncomingOffer.offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ type: 'call-answer', target: callPartner, answer: answer }));
+
+      pendingIncomingOffer = null;
+    }
+
+    function declineCall(){
+      if (pendingIncomingOffer){
+        ws.send(JSON.stringify({ type: 'call-end', target: pendingIncomingOffer.from }));
+      }
+      pendingIncomingOffer = null;
+      incomingCall.classList.remove('active');
+    }
+
+    function endCall(notifyPartner){
+      if (notifyPartner && callPartner){
+        ws.send(JSON.stringify({ type: 'call-end', target: callPartner }));
+      }
+      if (pc){ pc.close(); pc = null; }
+      if (localStream){ localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+      remoteAudio.srcObject = null;
+      callOverlay.classList.remove('active');
+      callPartner = null;
+    }
+
+    function toggleMute(){
+      if (!localStream) return;
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (!audioTrack) return;
+      audioTrack.enabled = !audioTrack.enabled;
+      muteBtn.classList.toggle('muted', !audioTrack.enabled);
+      muteBtn.innerHTML = audioTrack.enabled ? '&#127908;' : '&#128263;';
+    }
+
+    document.getElementById('callBtn').addEventListener('click', startCall);
+    document.getElementById('endCallBtn').addEventListener('click', () => endCall(true));
+    document.getElementById('acceptBtn').addEventListener('click', acceptCall);
+    document.getElementById('declineBtn').addEventListener('click', declineCall);
+    muteBtn.addEventListener('click', toggleMute);
+    // ---- End call feature setup ----
 
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(scheme + '://' + location.host + '/wss');
@@ -204,6 +462,33 @@
           if (friendTag === data.friend_name){
             user_status.innerText = "";
           }
+        }
+        // Someone is calling us
+        else if(data.type === 'call-offer'){
+          pendingIncomingOffer = { from: data.from, offer: data.offer };
+          incomingCallText.textContent = data.from + ' is calling...';
+          incomingCall.classList.add('active');
+        }
+        // Our call was accepted, other side sent back their answer
+        else if(data.type === 'call-answer'){
+          if (pc) pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        }
+        // Network info trickling in from the other side, needed to complete the connection
+        else if(data.type === 'call-ice-candidate'){
+          if (pc && data.candidate){
+            pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(err => console.error(err));
+          }
+        }
+        // Other side hung up, declined, or the call ended
+        else if(data.type === 'call-end'){
+          endCall(false);
+          incomingCall.classList.remove('active');
+          pendingIncomingOffer = null;
+        }
+        // We tried calling someone who isn't online
+        else if(data.type === 'call-status' && data.status === 'offline'){
+          alert(data.target + ' is offline right now.');
+          endCall(false);
         }
       }catch(e){ console.error(e) }
     });

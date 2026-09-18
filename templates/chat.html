@@ -370,13 +370,13 @@
       callStatus.textContent = 'Calling...';
       callOverlay.classList.add('active');
 
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      pc = new RTCPeerConnection(ICE_SERVERS);
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-      setupPeerConnectionEvents();
-
-      const offer = await pc.createOffer();
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
       await pc.setLocalDescription(offer);
       ws.send(JSON.stringify({ type: 'call-offer', target: callPartner, offer: offer }));
     }
@@ -390,13 +390,13 @@
       callStatus.textContent = 'Connected';
       callOverlay.classList.add('active');
 
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      pc = new RTCPeerConnection(ICE_SERVERS);
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-      setupPeerConnectionEvents();
-
-      await pc.setRemoteDescription(new RTCSessionDescription(pendingIncomingOffer.offer));
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       ws.send(JSON.stringify({ type: 'call-answer', target: callPartner, answer: answer }));

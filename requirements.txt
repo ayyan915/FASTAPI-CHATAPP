@@ -8,4 +8,4 @@ python-dotenv
 pwdlib[argon2]
 gunicorn==21.2.0
 eventlet==0.33.3
-sqlalchemy "psycopg[binary]"
+psycopg[binary]

@@ -87,7 +87,9 @@ def register(
     return RedirectResponse(url="/", status_code=303)
 
 @router.get("/")
-def login_form(request: Request):
+def login_form(request: Request, current_user: User = Depends(get_current_user)):
+    if current_user:
+        return RedirectResponse(url="/home/friends", status_code=303)
     return templates.TemplateResponse(request=request, name="login.html", context={"request": request})
 
 

@@ -7,6 +7,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#101113">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SecureChat">
 <style>
   :root {
     --bg: #f4f4f5;
@@ -197,6 +204,7 @@
         <h1>Chats</h1>
         <div class="me">
           <span class="me-tag">{{ current_user.name_tag }}</span>
+          <button id="installBtn" class="icon-btn" title="Install App" style="display:none;">&#10515;</button>
           <a class="icon-btn" href="/logout" title="Log out">&#9211;</a>
           <button id="addFriendToggle" class="icon-btn" title="Add Friend">+</button>
         </div>
@@ -286,6 +294,42 @@
       const encoded = encodeURIComponent(name);
       window.location.href = '/home/chat/' + encoded;
     }
+  </script>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+
+    // Custom "Install App" button. Chrome/Edge/Android fire this event once
+    // the PWA criteria (manifest + service worker + icons) are met and the
+    // app isn't installed yet; we hijack it so we can trigger install from
+    // our own button instead of waiting for the browser's own UI.
+    // Note: iOS Safari never fires this event -- there, installing is a
+    // manual "Share > Add to Home Screen" step with no JS hook available.
+    let deferredInstallPrompt;
+    const installBtn = document.getElementById('installBtn');
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredInstallPrompt = e;
+      installBtn.style.display = 'flex';
+    });
+
+    installBtn.addEventListener('click', async () => {
+      if (!deferredInstallPrompt) return;
+      deferredInstallPrompt.prompt();
+      await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      installBtn.style.display = 'none';
+    });
+
+    window.addEventListener('appinstalled', () => {
+      installBtn.style.display = 'none';
+      deferredInstallPrompt = null;
+    });
   </script>
 </body>
 </html>

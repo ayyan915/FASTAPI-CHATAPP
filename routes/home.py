@@ -14,7 +14,7 @@ templates = Jinja2Templates(directory="templates")
 @router.get("/friends")
 def friends(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not current_user:
-        return RedirectResponse(url="/auth/login", status_code=303)
+        return RedirectResponse(url="/", status_code=303)
 
     # Build friends list (name_tags) from Friends links for current user
     friend_links = db.query(Friends).filter_by(user_id=current_user.id).all()
@@ -34,7 +34,7 @@ def friends(request: Request, db: Session = Depends(get_db), current_user: User 
 @router.post("/add_friend")
 def add_friend(friend_name_tag: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not current_user:
-        return RedirectResponse(url="/auth/login", status_code=303)
+        return RedirectResponse(url="/", status_code=303)
 
     # normalize: allow users to submit with or without leading '@'
     normalized_tag = friend_name_tag.lstrip('@').strip()
@@ -59,7 +59,7 @@ def add_friend(friend_name_tag: str = Form(...), db: Session = Depends(get_db), 
 @router.get('/chat/{friend_tag}')
 def chat(request: Request, friend_tag: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not current_user:
-        return RedirectResponse(url="/auth/login", status_code=303)
+        return RedirectResponse(url="/", status_code=303)
 
     friend_user = db.query(User).filter_by(name_tag=friend_tag).first()
     if not friend_user:

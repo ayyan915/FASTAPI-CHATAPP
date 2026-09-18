@@ -294,12 +294,13 @@
   </div>
 
   <script>
-    const friendTag = "{{ friend.name_tag }}";
-    const meTag = "{{ current_user.name_tag }}";
+    // Use JSON encoding so names containing quotes/apostrophes do not break JavaScript.
+    const friendTag = {{ friend.name_tag|tojson }};
+    const meTag = {{ current_user.name_tag|tojson }};
     const messagesEl = document.getElementById('messages');
-    const user_status = document.getElementById('user_status')
+    const user_status = document.getElementById('user_status');
 
-    function appendMessage(sender, text){
+    function appendMessage(sender, text) {
       const div = document.createElement('div');
       div.className = 'bubble ' + (sender === meTag ? 'me' : 'them');
       div.textContent = text;
@@ -307,7 +308,9 @@
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
-    // ---- Call feature (WebRTC) ----
+    // ------------------------------------------------------------
+    // WebRTC voice-call feature
+    // ------------------------------------------------------------
     const ICE_SERVERS = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -328,10 +331,12 @@
         }
       ]
     };
-    let pc = null;              // RTCPeerConnection for the current call
-    let localStream = null;     // our own mic/camera stream
-    let callPartner = null;     // name_tag of whoever we are calling / in a call with
-    let pendingIncomingOffer = null; // { from, offer } while an incoming call is ringing
+
+    let pc = null;
+    let localStream = null;
+    let callPartner = null;
+    let pendingIncomingOffer = null;
+    let pendingIceCandidates = [];
 
     const callOverlay = document.getElementById('callOverlay');
     const callAvatar = document.getElementById('callAvatar');
@@ -342,91 +347,243 @@
     const incomingCallText = document.getElementById('incomingCallText');
     const muteBtn = document.getElementById('muteBtn');
 
-    function setupPeerConnectionEvents(){
-      // Whenever WebRTC finds a possible network path, it must be sent to the other side
-      pc.onicecandidate = (e) => {
-        if (e.candidate && callPartner){
-          ws.send(JSON.stringify({ type: 'call-ice-candidate', target: callPartner, candidate: e.candidate }));
+    function signal(message) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.error('WebSocket is not connected:', message);
+        alert('Connection to server is not ready. Please refresh the page.');
+        return false;
+      }
+      ws.send(JSON.stringify(message));
+      return true;
+    }
+
+    function createPeerConnection() {
+      if (pc) return pc;
+
+      pc = new RTCPeerConnection(ICE_SERVERS);
+      pendingIceCandidates = [];
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate && callPartner) {
+          signal({
+            type: 'call-ice-candidate',
+            target: callPartner,
+            candidate: event.candidate
+          });
         }
       };
-      // Fires when the other person's audio actually arrives
-      pc.ontrack = (e) => {
-        remoteAudio.srcObject = e.streams[0];
+
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          remoteAudio.srcObject = event.streams[0];
+          remoteAudio.play().catch(() => {
+            // Browser may block autoplay until a user gesture.
+          });
+        }
         callStatus.textContent = 'Connected';
       };
-      // If the connection drops (network issue, other side closed tab, etc.)
+
       pc.onconnectionstatechange = () => {
-        if (pc && (pc.connectionState === 'disconnected' || pc.connectionState === 'failed')){
+        if (!pc) return;
+
+        if (pc.connectionState === 'connecting') {
+          callStatus.textContent = 'Connecting...';
+        } else if (pc.connectionState === 'connected') {
+          callStatus.textContent = 'Connected';
+        } else if (pc.connectionState === 'disconnected') {
+          callStatus.textContent = 'Disconnected';
+          endCall(false);
+        } else if (pc.connectionState === 'failed') {
+          callStatus.textContent = 'Connection failed';
+          endCall(false);
+          alert('Call connection failed. Both users may need a stable internet connection.');
+        } else if (pc.connectionState === 'closed') {
           endCall(false);
         }
       };
+
+      pc.oniceconnectionstatechange = () => {
+        if (!pc) return;
+        if (pc.iceConnectionState === 'checking') {
+          callStatus.textContent = 'Connecting...';
+        }
+      };
+
+      return pc;
     }
 
-    async function startCall(){
-      if (pc) return; // already in a call, ignore double-click
+    async function getMicrophone() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('getUserMedia is not supported in this browser/context.');
+      }
+
+      return navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: false
+      });
+    }
+
+    async function addLocalTracks() {
+      if (!localStream) {
+        localStream = await getMicrophone();
+      }
+
+      const peer = createPeerConnection();
+      const existingTrackIds = new Set(
+        peer.getSenders().map(sender => sender.track && sender.track.id).filter(Boolean)
+      );
+
+      localStream.getTracks().forEach(track => {
+        if (!existingTrackIds.has(track.id)) {
+          peer.addTrack(track, localStream);
+        }
+      });
+    }
+
+    async function flushPendingIceCandidates() {
+      if (!pc || !pc.remoteDescription) return;
+
+      const candidates = pendingIceCandidates;
+      pendingIceCandidates = [];
+
+      for (const candidate of candidates) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.error('Failed to add queued ICE candidate:', err);
+        }
+      }
+    }
+
+    async function startCall() {
+      if (pc || pendingIncomingOffer) return;
+
       callPartner = friendTag;
-      callAvatar.textContent = friendTag.slice(0,1).toUpperCase();
+      callAvatar.textContent = friendTag.slice(0, 1).toUpperCase();
       callName.textContent = friendTag;
       callStatus.textContent = 'Calling...';
       callOverlay.classList.add('active');
 
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
+      try {
+        await addLocalTracks();
+
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true
+        });
+
+        await pc.setLocalDescription(offer);
+
+        if (!signal({
+          type: 'call-offer',
+          target: callPartner,
+          offer: pc.localDescription
+        })) {
+          endCall(false);
         }
-      });
-      await pc.setLocalDescription(offer);
-      ws.send(JSON.stringify({ type: 'call-offer', target: callPartner, offer: offer }));
+      } catch (err) {
+        console.error('Could not start call:', err);
+        endCall(false);
+
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          alert('Microphone permission was denied. Allow microphone access and try again.');
+        } else if (err.name === 'NotFoundError') {
+          alert('No microphone was found on this device.');
+        } else {
+          alert('Could not start the call: ' + err.message);
+        }
+      }
     }
 
-    async function acceptCall(){
+    async function acceptCall() {
       if (!pendingIncomingOffer) return;
-      callPartner = pendingIncomingOffer.from;
+
+      const incoming = pendingIncomingOffer;
+      pendingIncomingOffer = null;
       incomingCall.classList.remove('active');
-      callAvatar.textContent = callPartner.slice(0,1).toUpperCase();
+
+      callPartner = incoming.from;
+      callAvatar.textContent = callPartner.slice(0, 1).toUpperCase();
       callName.textContent = callPartner;
-      callStatus.textContent = 'Connected';
+      callStatus.textContent = 'Connecting...';
       callOverlay.classList.add('active');
 
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      ws.send(JSON.stringify({ type: 'call-answer', target: callPartner, answer: answer }));
+      try {
+        await addLocalTracks();
 
-      pendingIncomingOffer = null;
+        await pc.setRemoteDescription(new RTCSessionDescription(incoming.offer));
+        await flushPendingIceCandidates();
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        if (!signal({
+          type: 'call-answer',
+          target: callPartner,
+          answer: pc.localDescription
+        })) {
+          endCall(false);
+        }
+      } catch (err) {
+        console.error('Could not accept call:', err);
+        endCall(true);
+        alert('Could not accept the call: ' + err.message);
+      }
     }
 
-    function declineCall(){
-      if (pendingIncomingOffer){
-        ws.send(JSON.stringify({ type: 'call-end', target: pendingIncomingOffer.from }));
+    function declineCall() {
+      if (pendingIncomingOffer) {
+        signal({
+          type: 'call-end',
+          target: pendingIncomingOffer.from
+        });
       }
+
       pendingIncomingOffer = null;
       incomingCall.classList.remove('active');
     }
 
-    function endCall(notifyPartner){
-      if (notifyPartner && callPartner){
-        ws.send(JSON.stringify({ type: 'call-end', target: callPartner }));
+    function endCall(notifyPartner = true) {
+      const partner = callPartner;
+
+      if (notifyPartner && partner) {
+        signal({
+          type: 'call-end',
+          target: partner
+        });
       }
-      if (pc){ pc.close(); pc = null; }
-      if (localStream){ localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+
+      if (pc) {
+        pc.onicecandidate = null;
+        pc.ontrack = null;
+        pc.onconnectionstatechange = null;
+        pc.close();
+        pc = null;
+      }
+
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+
+      pendingIceCandidates = [];
       remoteAudio.srcObject = null;
       callOverlay.classList.remove('active');
       callPartner = null;
+      muteBtn.classList.remove('muted');
+      muteBtn.innerHTML = '&#127908;';
+      callStatus.textContent = 'Calling...';
     }
 
-    function toggleMute(){
+    function toggleMute() {
       if (!localStream) return;
+
       const audioTrack = localStream.getAudioTracks()[0];
       if (!audioTrack) return;
+
       audioTrack.enabled = !audioTrack.enabled;
       muteBtn.classList.toggle('muted', !audioTrack.enabled);
       muteBtn.innerHTML = audioTrack.enabled ? '&#127908;' : '&#128263;';
@@ -437,71 +594,122 @@
     document.getElementById('acceptBtn').addEventListener('click', acceptCall);
     document.getElementById('declineBtn').addEventListener('click', declineCall);
     muteBtn.addEventListener('click', toggleMute);
-    // ---- End call feature setup ----
 
+    // ------------------------------------------------------------
+    // WebSocket signaling + chat
+    // ------------------------------------------------------------
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(scheme + '://' + location.host + '/wss');
 
     ws.addEventListener('open', () => {
-      ws.send(JSON.stringify({ type: 'chat_history', with: friendTag }));
-      ws.send(JSON.stringify({type: "user_status", username: friendTag}));
+      signal({ type: 'chat_history', with: friendTag });
+      signal({ type: 'user_status', username: friendTag });
     });
 
-    ws.addEventListener('message', (ev) => {
-      try{
+    ws.addEventListener('close', () => {
+      if (pc) {
+        endCall(false);
+      }
+    });
+
+    ws.addEventListener('error', (err) => {
+      console.error('WebSocket error:', err);
+    });
+
+    ws.addEventListener('message', async (ev) => {
+      try {
         const data = JSON.parse(ev.data);
-        if(data.type === 'chat_history'){
+
+        if (data.type === 'chat_history') {
           data.messages.forEach(m => appendMessage(m.sender, m.content));
-        } else if(data.type === 'message'){
+
+        } else if (data.type === 'message') {
           appendMessage(data.sender, data.content);
-        }
-        else if(data.type === 'status', data.status === 'online', data.friend_name === friendTag){
-          user_status.innerText = data.status;
-        }
-        else if(data.type === 'status', data.status === 'offline'){
-          if (friendTag === data.friend_name){
-            user_status.innerText = "";
+
+        } else if (
+          data.type === 'status' &&
+          data.status === 'online' &&
+          data.friend_name === friendTag
+        ) {
+          user_status.innerText = 'online';
+
+        } else if (
+          data.type === 'status' &&
+          data.status === 'offline' &&
+          data.friend_name === friendTag
+        ) {
+          user_status.innerText = '';
+
+        // Someone is calling us.
+        } else if (data.type === 'call-offer') {
+          if (pc || pendingIncomingOffer) {
+            signal({ type: 'call-end', target: data.from });
+            return;
           }
-        }
-        // Someone is calling us
-        else if(data.type === 'call-offer'){
-          pendingIncomingOffer = { from: data.from, offer: data.offer };
+
+          pendingIncomingOffer = {
+            from: data.from,
+            offer: data.offer
+          };
           incomingCallText.textContent = data.from + ' is calling...';
           incomingCall.classList.add('active');
-        }
-        // Our call was accepted, other side sent back their answer
-        else if(data.type === 'call-answer'){
-          if (pc) pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        }
-        // Network info trickling in from the other side, needed to complete the connection
-        else if(data.type === 'call-ice-candidate'){
-          if (pc && data.candidate){
-            pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(err => console.error(err));
+
+        // Our call was accepted.
+        } else if (data.type === 'call-answer') {
+          if (!pc) return;
+
+          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          await flushPendingIceCandidates();
+
+        // Network candidates from the other side.
+        } else if (data.type === 'call-ice-candidate') {
+          if (!data.candidate) return;
+
+          if (pc && pc.remoteDescription) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            } catch (err) {
+              console.error('Failed to add ICE candidate:', err);
+            }
+          } else {
+            pendingIceCandidates.push(data.candidate);
           }
-        }
-        // Other side hung up, declined, or the call ended
-        else if(data.type === 'call-end'){
+
+        // Other side hung up / declined.
+        } else if (data.type === 'call-end') {
           endCall(false);
           incomingCall.classList.remove('active');
           pendingIncomingOffer = null;
-        }
-        // We tried calling someone who isn't online
-        else if(data.type === 'call-status' && data.status === 'offline'){
+
+        // We called someone who is offline.
+        } else if (data.type === 'call-status' && data.status === 'offline') {
           alert(data.target + ' is offline right now.');
           endCall(false);
         }
-      }catch(e){ console.error(e) }
+      } catch (e) {
+        console.error('WebSocket message error:', e);
+      }
     });
 
     document.getElementById('sendBtn').addEventListener('click', sendMessage);
-    document.getElementById('messageInput').addEventListener('keydown', (e)=>{ if(e.key === 'Enter') sendMessage() });
+    document.getElementById('messageInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
 
-    function sendMessage(){
+    function sendMessage() {
       const input = document.getElementById('messageInput');
-      const text = input.value.trim();
-      if(!text) return;
-      ws.send(JSON.stringify({ type: 'message', receiver: friendTag, content: text }));
-      appendMessage(meTag, text);
+      const messageText = input.value.trim();
+      if (!messageText) return;
+
+      if (!signal({
+        type: 'message',
+        receiver: friendTag,
+        content: messageText
+      })) {
+        return;
+      }
+
+      appendMessage(meTag, messageText);
       input.value = '';
     }
   </script>

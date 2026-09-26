@@ -1,12 +1,13 @@
 # SecureChat
 
-A real-time 1:1 chat app built with **FastAPI**, **SQLAlchemy**, and **WebSockets**. Users register with a unique `@name_tag`, add friends by tag, and exchange messages live over a WebSocket connection, with full chat history stored in the database.
+A real-time 1:1 chat app built with **FastAPI**, **SQLAlchemy**, and **WebSockets**. Users register with a unique `@name_tag`, add friends by tag, and exchange messages live over a WebSocket connection, live voice calling feature, with full chat history stored in the database.
 
 ## Features
 
 - Email/username registration and login with hashed passwords (`pwdlib`, Argon2)
 - JWT stored in an HTTP-only cookie for session auth
 - Add friends by `@name_tag`
+- live voice call feature
 - Real-time messaging over a single shared WebSocket (`/wss`)
 - Persisted chat history per friend pair
 - Server-rendered UI with Jinja2 templates (login, register, friends list, chat)
